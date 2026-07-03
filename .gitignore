@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Streamlit / OS
+.streamlit/secrets.toml
+.DS_Store
+
+# 本地文档（无需上传到云端仓库）
+*.pptx
+*.docx
+*.xlsx
