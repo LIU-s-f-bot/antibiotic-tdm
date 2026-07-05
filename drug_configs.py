@@ -57,6 +57,8 @@ INPUTS = {
     "alf":      {"label": "急性肝衰竭", "type": "checkbox", "default": False,
                  "help": "替加环素：是 → 不用"},
     "child":    {"label": "Child-Pugh 分级", "type": "select", "options": ["A", "B", "C"]},
+    "has_mic":  {"label": "有头孢他啶 MIC 数据", "type": "checkbox", "default": True,
+                 "help": "有 MIC → 头孢他啶谷浓度目标 ≥4×MIC；无 MIC → 目标 ≥8mg/L"},
     "mic_ca":   {"label": "头孢他啶 MIC", "unit": "mg/L", "type": "number", "default": 4.0, "step": 0.5},
     "mic_av":   {"label": "阿维巴坦 MIC", "unit": "mg/L", "type": "number", "default": 4.0, "step": 0.5,
                  "help": "阿维巴坦目标固定 ≥4mg/L，此处 MIC 仅供参考记录"},
@@ -81,14 +83,15 @@ INPUTS = {
 
     "ceftaz_meas_ca": {"label": "实测头孢他啶谷浓度", "unit": "mg/L", "type": "number", "default": 16.0, "step": 0.5},
     "ceftaz_meas_av": {"label": "实测阿维巴坦谷浓度", "unit": "mg/L", "type": "number", "default": 8.0, "step": 0.5},
+    "ceftaz_neuro":   {"label": "出现神经毒性症状（抽搐、意识改变等）", "type": "checkbox", "default": False,
+                       "help": "出现神经毒性 → 减为原剂量 2/3~1/2"},
 
-    "poly_meas": {"label": "实测谷浓度", "unit": "mg/L", "type": "number", "default": 70.0, "step": 5,
-                  "help": "目标 50-100mg/L（原文调整栏单位写作 mg·h/L，按数值阈值处理）"},
+    "poly_meas": {"label": "48h 实测谷浓度", "unit": "mg·h/L", "type": "number", "default": 70.0, "step": 5,
+                  "help": "48h TDM 谷浓度目标 50–100 mg·h/L"},
 
     "tige_meas":   {"label": "实测 fAUC/MIC", "unit": "", "type": "number", "default": 0.9, "step": 0.05},
-    "tige_thresh": {"label": "「减半」阈值（？？？）", "unit": "", "type": "number", "default": 1.2, "step": 0.1,
-                    "toggle": "启用「减半」阈值",
-                    "help": "PPT 未定值。取消勾选则不启用「减半」分支；默认值 1.2 仅为占位，请按临床设定"},
+    "tige_se":    {"label": "出现肝酶升高、严重恶心呕吐或其他不耐受迹象", "type": "checkbox", "default": False,
+                    "help": "即使 AUC/MIC 达标，出现不耐受也应强烈考虑下调剂量"},
 }
 
 
@@ -135,7 +138,7 @@ def _vanco_maintenance(p):
     # Ccr<80 且 CRRT
     if renal == "CKD":
         return R("500mg q12h", note="持续泵入", detail="CKD + CRRT")
-    return R("前 48h 正常剂量", note="AKI + CRRT：先按正常肾功能给 48h",
+    return R("前 48h 正常剂量（1g q12h）", note="AKI + CRRT：先按正常肾功能给 48h",
              detail="AKI + CRRT（Ccr<80）", level="info")
 
 
@@ -146,7 +149,7 @@ def _vanco_tdm(p):
     ci_r = logic.round250(ci * 1000) / 1000.0
     r1 = R(
         f"{ci_r:.2f} g/24h 持续泵入",
-        note="持续泵入公式（医生可选用）",
+        note="持续泵入公式（医生可选用）；AUC₀₋₂₄h = 随机血药浓度 × 24",
         detail=f"({p['vanco_target_ci']} / {p['vanco_meas_ci']}) × {orig} = {ci:.2f} g",
     )
     # ② AUC 公式
@@ -182,13 +185,17 @@ def _lin_loading(p):
 
 
 def _lin_maintenance(p):
-    ccr = p["ccr"]
-    if ccr > 30 or p["crrt"]:
-        return R("600mg q12h", detail="Ccr>30 或 CRRT")
-    # Ccr <= 30
-    if p["age"] > 70 and p["bw"] < 40:
-        return R("300mg q12h", detail="年龄>70 且 BW<40kg 且 Ccr<30", level="info")
-    return R("600mg q12h", note="Ccr≤30 但未达减量条件，按常规（PPT 未覆盖该组合）", level="info")
+    # 年龄＞70 或 体重＜40kg 或 Ccr＜30 → 300mg q12h
+    if p["age"] > 70 or p["bw"] < 40 or p["ccr"] < 30:
+        reasons = []
+        if p["age"] > 70:
+            reasons.append(f"年龄={p['age']}>70")
+        if p["bw"] < 40:
+            reasons.append(f"BW={p['bw']}<40kg")
+        if p["ccr"] < 30:
+            reasons.append(f"Ccr={p['ccr']}<30")
+        return R("300mg q12h", detail=" + ".join(reasons), level="info")
+    return R("600mg q12h", detail="年龄≤70，BW≥40kg，Ccr≥30")
 
 
 def _lin_tdm(p):
@@ -211,7 +218,7 @@ LINEZOLID = {
     "name": "经验性利奈唑胺",
     "ai_hint": "AI 推测患者 MRSA 可能性大",
     "continue_hint": "细菌及药敏提示有利奈唑胺使用指征，继续应用",
-    "inputs": ["age", "bw", "ccr", "crrt"],
+    "inputs": ["age", "bw", "ccr"],
     "tdm_inputs": ["lin_meas", "lin_plt"],
     "tdm_target": "谷浓度 2-7 mg/L",
     "loading": _lin_loading,
@@ -237,7 +244,7 @@ def _mero_maintenance(p):
         return R("1g q8h", note="持续泵入", detail="Ccr 80-120")
     # Ccr < 80
     if renal == "AKI":
-        return R("前 48h 正常剂量", note="AKI（Ccr<80）：先按正常肾功能给 48h",
+        return R("前 48h 正常剂量（1g q8h）", note="AKI（Ccr<80）：先按正常肾功能给 48h",
                  detail="AKI + Ccr<80", level="info")
     # CKD
     if p["crrt"]:
@@ -253,14 +260,13 @@ def _mero_tdm(p):
     t = p["mero_meas"]
     target = p["mero_target"]
     orig = p["mero_orig"]
-    # 精确公式（按目标/实测实现，PPT 原文为 /2）
+    # 精确公式（已确认：(目标谷浓度/20)×原剂量）
     precise = logic.mero_precise_adjust(target, t, orig)
     precise_r = logic.round250(precise * 1000) / 1000.0
     r_precise = R(
         f"{precise_r:.2f} g/24h 持续泵入",
-        note="⚠️ 精确公式：PPT 原文 (目标谷浓度/2)×原剂量 疑为笔误，此处按 (目标/实测)×原剂量 实现，请临床确认",
-        detail=f"({target} / {t}) × {orig} = {precise:.2f} g",
-        level="warning",
+        note="精确公式（医生可选用）",
+        detail=f"({target} / 20) × {orig} = {precise:.2f} g",
     )
     # 粗略
     if t < 8:
@@ -313,20 +319,43 @@ def _ceftaz_maintenance(p):
 
 
 def _ceftaz_tdm(p):
-    mic = p["mic_ca"]
+    has_mic = p.get("has_mic", False)
+    mic = p.get("mic_ca", 0)
     tca = p["ceftaz_meas_ca"]
     tav = p["ceftaz_meas_av"]
+    neuro = p.get("ceftaz_neuro", False)
     results = []
-    # 头孢他啶：按 MIC 倍数
-    if mic > 0:
+    # 头孢他啶
+    if has_mic and mic > 0:
         mult = tca / mic
-        if mult < 4:
-            r = R("头孢他啶：剂量加倍", detail=f"谷 {tca} / MIC {mic} = {mult:.1f}× (<4×MIC)", level="warning")
-        elif mult <= 10:
-            r = R("头孢他啶：剂量不变", detail=f"谷 {tca} / MIC {mic} = {mult:.1f}× (4-10×MIC)")
-        else:
+        # 神经毒性或 >10×MIC → 减量
+        if neuro or mult > 10:
+            reason_parts = []
+            if mult > 10:
+                reason_parts.append(f"谷 {tca} / MIC {mic} = {mult:.1f}× (>10×MIC)")
+            if neuro:
+                reason_parts.append("出现神经毒性症状")
             r = R("头孢他啶：减为原剂量 2/3~1/2",
-                  detail=f"谷 {tca} / MIC {mic} = {mult:.1f}× (>10×MIC) 或出现神经毒性", level="warning")
+                  detail="；".join(reason_parts), level="warning")
+        elif mult < 4:
+            r = R("头孢他啶：剂量加倍", detail=f"谷 {tca} / MIC {mic} = {mult:.1f}× (<4×MIC)", level="warning")
+        else:
+            r = R("头孢他啶：剂量不变", detail=f"谷 {tca} / MIC {mic} = {mult:.1f}× (4-10×MIC)")
+        results.append(r)
+    else:
+        # 无 MIC：<32 加倍，32-80 不变，>80 或神经毒性 → 减量
+        if neuro or tca > 80:
+            reason_parts = []
+            if tca > 80:
+                reason_parts.append(f"谷 {tca} >80 mg/L")
+            if neuro:
+                reason_parts.append("出现神经毒性症状")
+            r = R("头孢他啶：减为原剂量 2/3~1/2",
+                  detail="；".join(reason_parts), level="warning")
+        elif tca < 32:
+            r = R("头孢他啶：剂量加倍", detail=f"谷 {tca} <32 mg/L（无 MIC，目标 ≥32）", level="warning")
+        else:
+            r = R("头孢他啶：剂量不变", detail=f"谷 {tca} mg/L（无 MIC，32-80，达标）")
         results.append(r)
     # 阿维巴坦：固定 ≥4mg/L
     if tav < 4:
@@ -340,8 +369,8 @@ CEFTAZ = {
     "name": "头孢他啶/阿维巴坦",
     "ai_hint": "AI 推测患者非 CR G⁻ 杆菌可能性小（即 CR G⁻，KP/PA、美罗培南耐药）",
     "continue_hint": "细菌药敏提示 KP/PA、美罗培南耐药，继续应用",
-    "inputs": ["ccr", "crrt", "mic_ca", "mic_av"],
-    "tdm_inputs": ["ceftaz_meas_ca", "ceftaz_meas_av"],
+    "inputs": ["ccr", "crrt", "has_mic", "mic_ca", "mic_av"],
+    "tdm_inputs": ["ceftaz_meas_ca", "ceftaz_meas_av", "ceftaz_neuro"],
     "tdm_target": "必须同时监测：头孢他啶谷 ≥4×MIC（无 MIC 时 ≥8mg/L）；阿维巴坦谷 ≥4mg/L",
     "loading": _ceftaz_loading,
     "maintenance": _ceftaz_maintenance,
@@ -388,10 +417,10 @@ def _poly_maintenance(p):
 def _poly_tdm(p):
     t = p["poly_meas"]
     if t < 50:
-        return [R("每次剂量 +25mg", detail="谷浓度 <50", level="warning")]
+        return [R("每次剂量 +25mg", detail="48h 谷浓度 <50 mg·h/L", level="warning")]
     if t <= 100:
-        return [R("不变", detail="谷浓度 50-100，达标")]
-    return [R("每次剂量 −25mg", detail="谷浓度 >100", level="warning")]
+        return [R("不变", detail="48h 谷浓度 50-100 mg·h/L，达标")]
+    return [R("每次剂量 −25mg", detail="48h 谷浓度 >100 mg·h/L", level="warning")]
 
 
 POLYMYXIN = {
@@ -400,7 +429,7 @@ POLYMYXIN = {
     "continue_hint": "细菌药敏提示多黏菌素敏感，继续应用",
     "inputs": ["tbw", "height", "sex", "which_poly"],
     "tdm_inputs": ["poly_meas"],
-    "tdm_target": "谷浓度 50-100 mg/L",
+    "tdm_target": "48h TDM 谷浓度 50–100 mg·h/L",
     "loading": _poly_loading,
     "maintenance": _poly_maintenance,
     "tdm_adjust": _poly_tdm,
@@ -425,21 +454,33 @@ def _tige_maintenance(p):
         return R("不用（急性肝衰竭）", level="danger")
     bw = p["bw"]
     child = p["child"]
-    if bw >= 100:
-        return R("100mg q12h", detail="BW≥100kg（覆盖常规 Child 分级方案）", level="info")
-    if child in ("A", "B"):
-        return R("50mg q12h", detail="Child-Pugh A-B")
-    return R("25mg q12h", detail="Child-Pugh C", level="info")
+    # 肝功好（Child A）：按体重来
+    if child == "A":
+        if bw >= 100:
+            return R("100mg q12h", detail="Child A，BW≥100kg → 100mg q12h")
+        return R("50mg q12h", detail="Child A，BW<100kg → 50mg q12h")
+    # 肝功不好（Child B/C）：按肝功推荐，不看体重
+    if child == "B":
+        return R("50mg q12h", detail="Child B → 50mg q12h（按肝功，不看体重）", level="info")
+    return R("25mg q12h", detail="Child C → 25mg q12h（按肝功，不看体重）", level="info")
 
 
 def _tige_tdm(p):
     fr = p["tige_meas"]
-    thresh = p["tige_thresh"]
+    se = p.get("tige_se", False)  # 副作用/不耐受迹象
     if fr < 0.9:
         return [R("剂量加倍", detail=f"fAUC/MIC = {fr} <0.9", level="warning")]
-    if thresh not in (None, 0) and fr >= thresh:
-        return [R("剂量减半", detail=f"fAUC/MIC = {fr} ≥ 阈值 {thresh}", level="warning")]
-    return [R("不变", detail=f"fAUC/MIC = {fr} ≥0.9，达标")]
+    # fr >= 0.9: 达标
+    if se:
+        child = p.get("child", "A")
+        return [R(
+            "强烈考虑下调剂量：剂量减半 或 根据肝功调整",
+            note="如副作用主要是肝功异常 → 按 Child 分级调整；其他副作用 → 剂量减半",
+            detail=f"fAUC/MIC = {fr} ≥0.9 达标，但出现不耐受迹象（当前 Child {child}）",
+            level="warning",
+        )]
+    return [R("不变", note="如出现肝酶升高、严重恶心呕吐等不耐受迹象，应强烈考虑下调剂量",
+             detail=f"fAUC/MIC = {fr} ≥0.9，达标")]
 
 
 TIGECYCLINE = {
@@ -447,7 +488,7 @@ TIGECYCLINE = {
     "ai_hint": "AI 推测患者 CR G⁻ 杆菌可能性大",
     "continue_hint": "细菌药敏提示替加环素敏感，继续应用",
     "inputs": ["alf", "child", "bw"],
-    "tdm_inputs": ["tige_meas", "tige_thresh"],
+    "tdm_inputs": ["tige_meas", "tige_se"],
     "tdm_target": "fAUC/MIC ≥ 0.9",
     "loading": _tige_loading,
     "maintenance": _tige_maintenance,

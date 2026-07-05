@@ -120,11 +120,8 @@ def vanco_auc_adjust(target_auc: float, measured_auc: float, original_daily_g: f
 def mero_precise_adjust(target_trough: float, measured_trough: float, original_daily_g: float) -> float:
     """美罗培南 精确 公式。
 
-    PPT 原文为 (目标谷浓度 / 2) × 原每日剂量，但维度异常（疑为
-    (目标谷浓度 / 实测谷浓度) 之笔误）。此处按临床常规实现：
-        新日剂量 = (目标谷浓度 / 实测谷浓度) × 原日剂量
-    app 中会显著标注此差异，请临床确认。
+    已确认公式：新日剂量 = (目标谷浓度 / 20) × 原日剂量
     """
-    if measured_trough <= 0:
+    if target_trough <= 0:
         return original_daily_g
-    return (float(target_trough) / float(measured_trough)) * float(original_daily_g)
+    return (float(target_trough) / 20.0) * float(original_daily_g)
