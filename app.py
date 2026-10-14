@@ -88,11 +88,14 @@ def main():
     st.sidebar.caption("（依据 AI 病原学推测选药）")
     st.sidebar.divider()
     st.sidebar.markdown("**剂量取整规则**")
-    st.sidebar.caption("抗生素单次剂量取整到 500/750/1000mg；多黏菌素取 50/100/150mg（1 万 u=1mg）")
+    st.sidebar.caption("抗生素单次剂量取整到 500/750/1000mg")
 
     # —— 主区域头部 ——
     st.header(drug["name"])
-    st.info(f"🎯 **TDM 目标**：{drug['tdm_target']}")
+    if drug.get("monitoring"):
+        st.info(f"🩺 **安全性监测（替代 TDM）**：{drug['monitoring']}")
+    else:
+        st.info(f"🎯 **TDM 目标**：{drug['tdm_target']}")
 
     left, right = st.columns([3, 2])
 
@@ -119,26 +122,35 @@ def main():
         with c2:
             show_result(None, "维持剂量", maint)
 
-    # ========== 右：TDM 调整 ==========
+    # ========== 右：TDM 调整 / 安全性监测 ==========
     with right:
-        st.subheader("④ TDM 调整（48h 后）")
-        tp = {}
-        for key in drug["tdm_inputs"]:
-            tp[key] = render_input(key, st)
-
-        compute = st.button("计算 TDM 调整", type="primary", use_container_width=True)
-
-        st.markdown("---")
-        if compute:
-            results = drug["tdm_adjust"]({**p, **tp})
-            for i, r in enumerate(results):
-                show_result(None, f"调整方案 {i+1}", r)
-                st.markdown("")
+        if drug.get("monitoring"):
+            st.subheader("④ 安全性监测（不做 TDM）")
+            st.warning(drug["monitoring"])
+            st.caption("v2 流程：以不良反应监测替代 TDM；发生以上不良反应 → 建议停药。")
         else:
-            st.caption("填入实测浓度后点击「计算 TDM 调整」")
+            timing = drug.get("tdm_timing", "48h")
+            st.subheader(f"④ TDM 调整（{timing} 后）")
+            tp = {}
+            for key in drug["tdm_inputs"]:
+                tp[key] = render_input(key, st)
+
+            compute = st.button("计算 TDM 调整", type="primary", use_container_width=True)
+
+            st.markdown("---")
+            if compute:
+                results = drug["tdm_adjust"]({**p, **tp})
+                for i, r in enumerate(results):
+                    show_result(None, f"调整方案 {i+1}", r)
+                    st.markdown("")
+            else:
+                st.caption("填入实测浓度后点击「计算 TDM 调整」")
 
     st.divider()
-    st.caption("🔁 每次调整剂量后 **48h 再次 TDM**，直到达标稳定。")
+    if drug.get("monitoring"):
+        st.caption("🩺 本药按 v2 流程不做 TDM，以不良反应监测替代。")
+    else:
+        st.caption(f"🔁 每次调整剂量后 **{drug.get('tdm_timing', '48h')} 再次 TDM**，直到达标稳定。")
     st.caption("⚠️ 本工具依据 PPT 流程实现，部分公式/阈值待临床确认，仅供临床参考，最终方案由医师判定。")
 
 
